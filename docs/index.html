@@ -1,0 +1,489 @@
+<!--
+  Copyright 2018 The Distill Template Authors
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+       http://www.apache.org/licenses/LICENSE-2.0
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<!doctype html> 
+
+<head>
+  <script src="https://distill.pub/template.v2.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf8">
+  <title>CLIP Enrichment Circuits</title>
+
+  <style>
+    .clip-explicit {
+      color: transparent;
+      text-shadow: 0 0 10px rgba(0,0,0,0.5);
+      cursor: pointer;
+    }
+
+    .clip-n {
+      background: #ae6ab4;
+      padding: 0 5px;
+      border-radius: 5px;
+      color: white;
+      font-weight: normal;
+      white-space: nowrap;
+    }
+    .clip-n * {
+      border: none;
+    }
+    .clip-n img:hover {
+      transform: scale(8);
+    }
+
+    d-article {
+      counter-reset: figcap;
+    }
+
+    figure {
+      counter-increment: figcap;
+    }
+
+    figcaption .figure-number::after {
+      content: " " counter(figcap) ":";
+    }
+
+    figcaption img {
+      width: initial !important;
+    }
+
+    .shaded-figure {
+      background-color: hsl(0, 0%, 97%);
+      border-top: 1px solid hsla(0, 0%, 0%, 0.1);
+      border-bottom: 1px solid hsla(0, 0%, 0%, 0.1);
+      padding: 30px 0;
+    }
+  </style>
+</head>
+
+<body>
+  <distill-header></distill-header>
+  <d-front-matter>
+    <script id='distill-front-matter' type="text/json">{
+    "title": "CLIP Enrichment Circuits",
+    "description": "We investigate late circuits on CLIP's vision side to understand how they glue abstract concepts together and build more general multimodal neurons.",
+    "published": null,
+    "authors": [
+      {
+        "author":"Sidney Hough †",
+        "authorURL":"https://sidneyh.com/",
+        "affiliations": [{"name": "Stanford University", "url": "https://stanford.edu"}]
+      },
+      {
+        "author":"Kevin Liu †",
+        "authorURL":"https://kliu.io/",
+        "affiliations": [{"name": "Stanford University", "url": "https://stanford.edu"}]
+      },
+      {
+        "author":"Jack Ryan †",
+        "authorURL":"https://jackaldenryan.com/",
+        "affiliations": [{"name": "Stanford University", "url": "https://stanford.edu"}]
+      },
+      {
+        "author": "Chelsea Voss",
+        "authorURL": "https://csvoss.com",
+        "affiliations": [{"name": "OpenAI", "url": "https://openai.com"}]
+      }
+    ],
+    "katex": {
+      "delimiters": [
+        {"left": "$$", "right": "$$", "display": false}
+      ]
+    }
+  }</script>
+  </d-front-matter>
+  <d-title>
+    <p>We investigate late circuits on CLIP's vision side to understand how they glue abstract concepts together and build more general multimodal neurons.</p>
+  </d-title>
+  <d-byline></d-byline>
+  <d-article>
+    <h2>Context</h2>
+
+    <p>We build off of the work done in Multimodal Neurons in Artificial Neural Networks<d-cite key="goh2021multimodal"></d-cite>, diving deeper into the features in hidden layers of the CLIP model<d-cite key="radford2021learning"></d-cite>. In the spirit of the circuits agenda<d-cite key="olah2020zoom"></d-cite>, we looked at individual units and their connections to attempt to unravel a small part of the algorithm CLIP uses to identify images.</p>
+    
+    <p>For context, the CLIP model we studied (CLIP-RN50<d-footnote>This is a smaller model than the RN50-4x version studied by Goh et al. 2021, as weights for RN50-4x were not publicly available at the time of research.</d-footnote>) has two parts: a ResNet vision model<d-cite key="he2015deep"></d-cite> and a Transformer language model <d-cite key="vaswani2017attention"></d-cite>. We investigated the ResNet side, which has as its final layer a <code>relu</code> layer with 2048 channels that combines via pairwise addition the activations from a <code>conv2d</code> layer and the previous <code>relu</code> layer (the residual connection). 
+
+    <p>We confirm significant similarities in the final layer to RN50-4x, including features for letters and crystallized concepts, such as "<clip-n data-id="4/2/6/1052">Trump</clip-n>," "<clip-n data-id="4/2/6/13">Buddha</clip-n>," and "<clip-n data-id="4/2/6/2">hat</clip-n>." Our primary goal was to find <strong>enrichment circuits</strong>, a term that deserves more rigorous definition, but that we shall tentatively describe as a circuit involving a unit in the final layer that combines one facet or modality from the the <code>conv</code> side with another from the residual connection. To do so, we investigated both case studies of circuits in the final layer as well as macroscopic properties of the network.</p>
+
+    <h2>Terminology</h2>
+
+    <p>The terms "neuron," "unit," and "channel" can often be used ambiguously in writing about circuits. For clarity, we explain the terminology we use in this article below. Our terminology comes from <a href="https://distill.pub/2017/feature-visualization/">Feature Visualization</a><d-cite key="olah2017feature"></d-cite>.</p>
+
+    <ul>
+      <li><strong>Neuron</strong>: the specific activation of a channel in a given layer <em>at an (x, y)</em> position in the image.</li>
+      <li><strong>Unit</strong>, <strong>Channel</strong>: the activation of a channel in a given layer, averaged over all x and y spatial positions in the image. This gives a good general impression over what a given channel (corresponding, for <code>conv</code> layers, to one filter) is detecting.</li>
+    </ul>
+
+    <p>Most references to a given feature in this article are to a unit as a whole. To refer to a unit, we use the notation <strong><code>layer/bottleneck/index/channel</code></strong>; for example, <clip-n data-id="4/2/6/1"></clip-n> corresponds to <a href="https://microscope.openai.com/models/contrastive_rn50/image_block_4_2_Add_6_0/1">unit 1 of layer 4/2/Add_6</a> on <a href="https://microscope.openai.com">OpenAI Microscope</a>. Units are highlighted in purple; you can click the unit number to open it in Microscope or hover over the image to see a feature visualization preview.</p>
+
+    <h2>Case Studies</h2>
+
+    <p>Below, we present our findings from backtracing the contributions to several units in the final <code>relu</code> layer. The amount that one unit <a href="#contribution">contributes</a> to another is roughly the magnitude of the weights connecting one unit to the other. We present contributions as both a magnitude and a mean, where the magnitude shows the size of the contribution, and the mean roughly tells us whether the weight is inhibitory or excitatory.</p>
+
+    <p><em>Note: some neurons studied activate on explicit content. Explicit text and images will be blurred until manually revealed.</em></p>
+
+    <h3><clip-n data-id="4/2/6/34">You"/"Bloody Wound" Unit</clip-id></h3>
+
+      <figure id="figure-you">
+        <span style="text-align: center"><object type="image/svg+xml" data="img/bloody-wound.svg" style="max-width: 500px"></object></span>
+        <figcaption style="margin-top: 10px">
+            <p><a href="#figure-you" class="figure-number">FIGURE</a> A simplified diagram of the residual connections between <clip-n data-id="4/2/6/34"></clip-n>, <clip-n data-id="4/1/6/34"></clip-n>, and <clip-n data-id="4/2/5/34"></clip-n>. The unit to the right represents the final layer of a convolutional bottleneck, while the unit on the bottom represents the output of the previous relu.</p>
+
+            <p>In each figure, you can click any unit to open it in <a href="https://microscope.openai.com/models">OpenAI Microscope</a>.</p>
+        </figcaption>
+      </figure>
+  
+      <p>We view this unit as a clear "enrichment circuit" &mdash; it portrays sharply different concepts in its <code>relu</code> and <code>conv</code> contributions, with both contributing to the final unit. Looking at the feature vis and dataset examples, the final unit appears to be a mix of "you" text detection and a bloody wound detector; looking at the previous <clip-n data-id="4/2/5/34">conv unit</clip-n>, we see it acts primarily as a bloody wound detector, while looking at the previous <clip-n data-id="4/1/6/34">relu</clip-n>, it appears to detect "you."</p>
+      
+      <p>While the rationale for combining "you" + bloody wound into a single neuron is unknown, we find it interesting how decomposable the two concepts are by looking at earlier units, and we conjecture the same decomposability may apply to other units, e.g. "text detector for Trump" + "image detector for Trump" = "Trump unit."</p>
+    
+      <p>To see the relative contributions of the <code>relu</code> unit versus the convolutional bottleneck unit to 4/2/6/34, we also developed a <a href="#residual">technique</a> for measuring the percent <code>relu</code> contribution based on the relative activations of the two units on the feature visualization of the final unit. While we have uncertainties about the reliability of this technique, in this case we find that the <clip-n data-id="4/1/6/34">relu unit</clip-n> contributes <code>99.66%</code> to the final activation, which matches the observation that all the dataset examples and the majority of the feature visualizations are of "you."</p>
+
+    <h3><clip-n data-id="4/2/6/2">"Cap" Unit</clip-n></h3>
+
+    <figure id="figure-cap" class="shaded-figure" style="grid-column: screen; padding: 0 2em;">
+      <div style="max-width: 950px; padding: 2em; margin: 0 auto;">
+        <object type="image/svg+xml" data="img/hat-neuron.svg" width="100%"></object>
+
+        <figcaption>
+          <a href="#figure-cap" class="figure-number">FIGURE</a> Diagram showing identity connections (grey) and convolutional contributions (green/red) discovered via expanded weights. Single images in squares represent the feature visualization of that particular unit, while quadruplets of images represent highly-activating dataset examples taken from Yahoo Flickr Creative Commons<d-cite key="Thomee_2016"></d-cite>.
+        </figcaption>
+      </div>
+    </figure>
+
+    <p>One of the first coherent units we found was 4/2/6/2, which seems to activate highly on pictures of hats, as well as the words "cap," "famous," "savage,", "<span class="clip-explicit">pussy</span>," and "caps."</p>
+
+    <p>4/2/6/2 receives contributions from <clip-n data-id="4/1/6/2"></clip-n> (prev relu) and <clip-n data-id="4/2/5/2"></clip-n> (prev conv). Interestingly, these two contributors represent <em>radically different</em> concepts, with 4/1/6/2 activating on typical pictures of hats, but with 4/2/5/2 activating on images of trucks and swears (along with hats to a lesser extent). This suggests that while 4/2/6/2 activates primarily on hats, it gains novel facets from 4/2/5/2, which explains the explicit words it activates on.</p>
+
+    <p>Diving deeper, <clip-n data-id="4/1/6/2"></clip-n> is itself the result of a residual addition between <clip-n data-id="4/1/5/2"></clip-n> and <clip-n data-id="4/0/8/2"></clip-n>. 4/1/5/2 appears to be a hat detector with an emphasis on <em>woolen texture</em>. We then used <a href="#contribution">expanded weights</a> to find its most excitatory and inhibitory weight connections. We found that the most positive connections were for <clip-n data-id="4/1/3/51">"dome"</clip-n> and <clip-n data-id="4/1/3/108">"clothesrack/aisle"</clip-n>, while the most negative connections were for <clip-n data-id="4/1/3/496">"sombrero hat"</clip-n> and <clip-n data-id="4/1/3/219">"boots"</clip-n>. These results seem to imply that the "cap" neuron may learn some of its roundness from "dome" detection, and is strongly distinct from other types of hats like sombreros.</p>
+
+    <p>Moving to <clip-n data-id="4/2/5/2">the previous <code>conv</code> unit</clip-n>, we can again use expanded weights to see that it has strong positive connections to <clip-n data-id="4/2/3/325">"Skateboarder"</clip-n> and <clip-n data-id="4/2/3/108">"Cruise ship"</clip-n>, and has strong negative connections to <clip-n data-id="4/2/3/322">"?"</clip-n><d-footnote>Appears to have no single interpretable meaning.</d-footnote> and <clip-n data-id="4/2/3/3">"computer chip"</clip-n><d-footnote>We call this the "computer chip" unit, but it also activates for wind turbines, oil, shipping containers, and a variety of other features, suggesting it is not distinct in meaning.</d-footnote>. This explains to some extent the examples of skateboarders and heavy machinery in 4/2/5/2, although the precise functionality of the contributing units (especially the inhibitory ones) is unknown.</p>
+    
+    <h2>Macroscopic Properties of CLIP</h2>
+
+    <p>Not only did we look at specific circuits, but we also tried to understand a few higher-level properties
+      of the network &mdash; what we call "feature versatility" and "bottleneck learning."</p>
+
+    <h3>Forward Contributions</h3>
+      <p>Just as we can see which units contribute to a given later unit and to what degree, we can see which later units a given unit contributes to and to what degree.
+      When analyzing the network from the latter point of view, we will use the terminology "forward contributions" (as opposed to "backward contributions" or just "contributions").
+      We found that in contrast to backward contributions, which exhibit an exponential distribution, the forward contributions we looked at seemed to exhibit something
+      a less spiky distribution, closer to normal. Additionally, we found that units from earlier and earlier layers were less and less likely to have forward contributions to the final conv layer (4/2/5) near zero, tending toward a bimodal distribution of forward contributions. The earlier units are more "versatile" in the sense that they
+      contribute to more features to a greater degree.</p>
+
+      <figure id="figure-feature-vers-2">
+        <img src="https://i.imgur.com/iQYCu89.png">
+        <figcaption>
+          <br>
+          <a href="#figure-feature-vers-2">FIGURE</a>
+          Histograms showing the frequency (y-axis) of various contribution strengths (x-axis) from the unit to each unit in the later layer. Starting earlier in the network leads to fewer contributions near zero as well as a roughly balanced degree of positive and negative contributions. By varying the lower unit, we can see a gradient from unimodal to bimodal forward contributions.
+        </figcaption>
+      </figure>
+
+
+      <p>This isn't surprising, since earlier parts of the network tend to form simpler features. What may be surprising though, is that earlier features tend to strongly contribute both positively and negatively. From our limited investigations, it seems that features have roughly balanced positive and negative forward contributions on average.
+      </p>
+
+      <h3>A Peculiarity</h3>
+      <p>Above, we examined forward contributions by fixing the upper layer and then seeing how contributions varied as the lower unit varied. But what if we instead vary the upper layer and fix the lower unit? Before doing this, we expected to see a gradual shift from unimodal to bimodal contribution distributions, just as in the above histograms. Instead, we found that the shift to bimodality is sudden.</p>
+
+
+      <figure id="figure-feature-vers-1">
+        <img src="https://i.imgur.com/ZDkdGU7.png">
+        <figcaption>
+          <br>
+          <a href="#figure-feature-vers-1">FIGURE</a>
+          Histograms of forward contributions to various upper layers, where the upper layer varies from left to right and the lower unit is held constant. In all three cases (each case designated by a row in this grid), we see a sudden shift to bimodality at layer 4/2/5, the final conv layer in the network.
+        </figcaption>
+      </figure>
+
+      <p>
+        Additionally, we only found bimodal forward contributions toward layer 4/2/5. For example, we didn't see bimodality for forward contributions to the last conv layer of any other bottleneck, though more investigation is needed to completely verify this as we only looked at a small set of examples. If layer 4/2/5 is indeed the only layer that exhibits contribution bimodality, this might mean that the rest of the network is optimized for building "versatile" features, whereas the late parts of the network are tasked with actually putting together all of these features (hence having so few contributions near zero).
+      </p>
+
+     
+  
+      
+
+<!-- 
+      <img src="../images/Backward_Contrib_Dist.png" alt="Forward Contributions" width="200" height="200">
+      Label: Unit X's contributions from Layer Y
+
+      <img src="../images/Forward_Contrib_Dist.png" alt="Forward Contributions" width="200" height="200">
+      Label: Unit X's contributions to Layer Y -->
+
+      <!-- <img src="../images/Backward_Contrib_Dist.png" alt="Forward Contributions" width="200" height="200">
+      Label: Unit X's contributions to Layer Y
+
+      <img src="../images/Forward_Contrib_Dist.png" alt="Forward Contributions" width="200" height="200">
+      Label: Unit W's contributions to Layer Y
+
+      <img src="../images/Forward_Contrib_Dist.png" alt="Forward Contributions" width="200" height="200">
+      Label: Unit V's contributions to Layer Y -->
+      
+      
+
+    <h3 id="residual">Residual Investigation and Bottleneck Learning</h3>
+
+    <p>The skip connections in the ResNet made it difficult to understand if contributions from bottlenecks were actually important
+      to the final output of the network, or if any concepts learned in bottlenecks throughout the network were "retained." For instance,
+      we would often see a set of highly activating dataset examples for some channel in the <a href="https://microscope.openai.com/models/contrastive_rn50/image_block_4_2_add_5_0?models.op.feature_vis.type=channel&models.op.technique=feature_vis">
+      1×1 convolution layer</a> preceding the ultimate <a href="https://microscope.openai.com/models/contrastive_rn50/image_block_4_2_Add_6_0?models.op.feature_vis.type=channel&models.op.technique=feature_vis">
+      <code>relu</code> layer</a>, but these same dataset examples would not strongly activate the corresponding channel in the <code>relu</code> layer. Instead,
+      the channel in the <code>relu</code> layer closely resembled the same channel in the previous <code>relu</code> (in the sense that there was significant overlap
+      in their sets of highly activating dataset examples). This indicates that visual concepts were learned within the last bottleneck but were "discarded" or
+      dominated by the added output from the previous ReLU.</p>
+
+    <figure id="figure-res-1">
+      <svg width="370.8px" height="195.6px" viewBox="0 0 927 489" version="1.1" xmlns="http://www.w3.org/2000/svg"
+        xmlns:xlink="http://www.w3.org/1999/xlink">
+        <defs>
+          <pattern id="img1" height = "100%" width = "100%" patternContentUnits = "objectBoundingBox">
+            <image href="https://i.imgur.com/LvgKNyT.png" preserveAspectRatio = "none" width = "1" height = "1"/>
+          </pattern>
+          <pattern id="img2" height = "100%" width = "100%" patternContentUnits = "objectBoundingBox">
+            <image href="https://i.imgur.com/I1UhVhv.png" preserveAspectRatio = "none" width = "1" height = "1"/>
+          </pattern>
+          <pattern id="img3" height = "100%" width = "100%" patternContentUnits = "objectBoundingBox">
+            <image href="https://i.imgur.com/3VcCIAQ.png" preserveAspectRatio = "none" width = "1" height = "1"/>
+          </pattern>
+          <pattern id="img4" height = "100%" width = "100%" patternContentUnits = "objectBoundingBox">
+            <image href="https://i.imgur.com/b7eQqyk.png" preserveAspectRatio = "none" width = "1" height = "1"/>
+          </pattern>
+          <pattern id="img5" height = "100%" width = "100%" patternContentUnits = "objectBoundingBox">
+            <image href="https://i.imgur.com/L31peJI.png" preserveAspectRatio = "none" width = "1" height = "1"/>
+          </pattern>
+          <pattern id="img6" height = "100%" width = "100%" patternContentUnits = "objectBoundingBox">
+            <image href="https://i.imgur.com/9XWQ5DZ.png" preserveAspectRatio = "none" width = "1" height = "1"/>
+          </pattern>
+        </defs>
+        <g id="Page-1" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+          <g id="Artboard" transform="translate(-406.000000, -93.000000)">
+            <g id="Group-4" transform="translate(408.000000, 93.000000)">
+              <path
+              d="M706,273 L922,273 L922,469 C922,480.045695 913.045695,489 902,489 L726,489 C714.954305,489 706,480.045695 706,469 L706,273 L706,273 Z"
+              id="Rectangle" fill="url(#img6)"></path>
+              <a href="https://microscope.openai.com/models/contrastive_rn50/image_block_4_2_Add_6_0/295" target="_blank">
+                <path
+                d="M726,52 L902,52 C913.045695,52 922,60.954305 922,72 L922,268 L922,268 L706,268 L706,72 C706,60.954305 714.954305,52 726,52 Z"
+                id="Rectangle" fill="url(#img5)"></path>
+              </a>
+              <line x1="706.5" y1="268.5" x2="922.5" y2="268.5" id="Line" stroke="#FFFFFF" stroke-width="5"
+                stroke-linecap="square"></line>
+              <path
+                d="M0,273 L216,273 L216,469 C216,480.045695 207.045695,489 196,489 L20,489 C8.954305,489 1.60685294e-14,480.045695 0,469 L0,273 L0,273 Z"
+                id="Rectangle" fill="url(#img2)"></path>
+              <a href="https://microscope.openai.com/models/contrastive_rn50/image_block_4_1_Add_6_0/295" target="_blank">
+                <path
+                d="M21,52 L197,52 C208.045695,52 217,60.954305 217,72 L217,268 L217,268 L1,268 L1,72 C1,60.954305 9.954305,52 21,52 Z"
+                id="Rectangle" fill="url(#img1)"></path>
+              </a>
+              <line x1="0.5" y1="268.5" x2="216.5" y2="268.5" id="Line" stroke="#FFFFFF" stroke-width="5"
+                stroke-linecap="square"></line>
+              <path
+                d="M353,273 L569,273 L569,469 C569,480.045695 560.045695,489 549,489 L373,489 C361.954305,489 353,480.045695 353,469 L353,273 L353,273 Z"
+                id="Rectangle" fill="url(#img3)"></path>
+                <a href="https://microscope.openai.com/models/contrastive_rn50/image_block_4_2_add_5_0/295" target="_blank">
+                  <path 
+                  d="M373,52 L549,52 C560.045695,52 569,60.954305 569,72 L569,268 L569,268 L353,268 L353,72 C353,60.954305 361.954305,52 373,52 Z" 
+                  id="Rectangle" fill="url(#img4)"></path>
+                </a>
+              <line x1="353.5" y1="272.5" x2="569.5" y2="272.5" id="Line" stroke="#FFFFFF" stroke-width="5"
+                stroke-linecap="square"></line>
+              <text id="0.98×" fill-rule="nonzero" font-family="HelveticaNeue-Medium, Helvetica Neue" font-size="30"
+                font-weight="400" fill="#747474">
+                <tspan x="70.31" y="29">0.98×</tspan>
+              </text>
+              <text id="+" fill-rule="nonzero" font-family="HelveticaNeue, Helvetica Neue" font-size="63" font-weight="normal"
+                fill="#747474">
+                <tspan x="266.1" y="292">+</tspan>
+              </text>
+              <text id="=" fill-rule="nonzero" font-family="HelveticaNeue, Helvetica Neue" font-size="63" font-weight="normal"
+                fill="#747474">
+                <tspan x="619.1" y="292">=</tspan>
+              </text>
+              <text id="0.02×" fill-rule="nonzero" font-family="HelveticaNeue-Medium, Helvetica Neue" font-size="30"
+                font-weight="400" fill="#747474">
+                <tspan x="423.31" y="29">0.02×</tspan>
+              </text>
+            </g>
+          </g>
+        </g>
+      </svg>
+      <figcaption style="margin-top: 10px">
+        <a href="#figure-res-1" class="figure-number">FIGURE</a>
+        Unit 295 from layer 4/1/6 (a ReLU), 4/2/5 (a 1×1 conv), and 4/2/6 (the final ReLU). The unit in 4/1/6 and 4/2/6 activate strongly
+          on images of daisies. Unit 295 in 4/2/5 activates strongly on monarch butterflies, but these butterflies aren't seen in
+          the top dataset examples in 4/2/6.
+      </figcaption>
+    </figure>
+
+    <p>To determine which channels learned new information within a bottleneck, we scraped <a href="https://microscope.openai.com/models/contrastive_rn50?models.technique=deep_dream">OpenAI Microscope</a>
+    for the feature visualizations of several bottlenecks' <code>relu</code> layers. The expectation was that these would be visual representations of the combination of 
+    concepts contributed by the residual function and shortcut. We then computed the activations of units in the last convolutional layer and previous
+    <code>relu</code> layer on their corresponding feature visualization (the feature visualization for the <code>relu</code> channel both of these units contribute to).
+    Next, we divided the activation of the shortcut by the sum of the output of the residual mapping and the shortcut;
+    this gave us a rough sense of how much the skip connection was responsible for the bottleneck's final output.</p>
+
+    <figure id="figure-res-2">
+      <svg width="370.8px" height="195.6px" viewBox="0 0 927 489" version="1.1" xmlns="http://www.w3.org/2000/svg"
+        xmlns:xlink="http://www.w3.org/1999/xlink">
+        <defs>
+          <pattern id="img7" height = "100%" width = "100%" patternContentUnits = "objectBoundingBox">
+            <image href="https://i.imgur.com/J978QOT.png" preserveAspectRatio = "none" width = "1" height = "1"/>
+          </pattern>
+          <pattern id="img8" height = "100%" width = "100%" patternContentUnits = "objectBoundingBox">
+            <image href="https://i.imgur.com/bdzSH2h.png" preserveAspectRatio = "none" width = "1" height = "1"/>
+          </pattern>
+          <pattern id="img9" height = "100%" width = "100%" patternContentUnits = "objectBoundingBox">
+            <image href="https://i.imgur.com/oxMJqpE.png" preserveAspectRatio = "none" width = "1" height = "1"/>
+          </pattern>
+          <pattern id="img10" height = "100%" width = "100%" patternContentUnits = "objectBoundingBox">
+            <image href="https://i.imgur.com/PsU5j5U.png" preserveAspectRatio = "none" width = "1" height = "1"/>
+          </pattern>
+          <pattern id="img11" height = "100%" width = "100%" patternContentUnits = "objectBoundingBox">
+            <image href="https://i.imgur.com/IK8WGIN.png" preserveAspectRatio = "none" width = "1" height = "1"/>
+          </pattern>
+          <pattern id="img12" height = "100%" width = "100%" patternContentUnits = "objectBoundingBox">
+            <image href="https://i.imgur.com/hE60n5E.png" preserveAspectRatio = "none" width = "1" height = "1"/>
+          </pattern>
+        </defs>
+        <g id="Page-1" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+          <g id="Artboard" transform="translate(-406.000000, -93.000000)">
+            <g id="Group-4" transform="translate(408.000000, 93.000000)">
+              <path
+              d="M706,273 L922,273 L922,469 C922,480.045695 913.045695,489 902,489 L726,489 C714.954305,489 706,480.045695 706,469 L706,273 L706,273 Z"
+              id="Rectangle" fill="url(#img12)"></path>
+              <a href="https://microscope.openai.com/models/contrastive_rn50/image_block_4_2_Add_6_0/11" target="_blank">
+                <path
+                d="M726,52 L902,52 C913.045695,52 922,60.954305 922,72 L922,268 L922,268 L706,268 L706,72 C706,60.954305 714.954305,52 726,52 Z"
+                id="Rectangle" fill="url(#img11)"></path>
+              </a>
+              <line x1="706.5" y1="268.5" x2="922.5" y2="268.5" id="Line" stroke="#FFFFFF" stroke-width="5"
+                stroke-linecap="square"></line>
+              <path
+                d="M0,273 L216,273 L216,469 C216,480.045695 207.045695,489 196,489 L20,489 C8.954305,489 1.60685294e-14,480.045695 0,469 L0,273 L0,273 Z"
+                id="Rectangle" fill="url(#img8)"></path>
+              <a href="https://microscope.openai.com/models/contrastive_rn50/image_block_4_1_Add_6_0/11" target="_blank">
+                <path
+                d="M21,52 L197,52 C208.045695,52 217,60.954305 217,72 L217,268 L217,268 L1,268 L1,72 C1,60.954305 9.954305,52 21,52 Z"
+                id="Rectangle" fill="url(#img7)"></path>
+              </a>
+              <line x1="0.5" y1="268.5" x2="216.5" y2="268.5" id="Line" stroke="#FFFFFF" stroke-width="5"
+                stroke-linecap="square"></line>
+              <path
+                d="M353,273 L569,273 L569,469 C569,480.045695 560.045695,489 549,489 L373,489 C361.954305,489 353,480.045695 353,469 L353,273 L353,273 Z"
+                id="Rectangle" fill="url(#img9)"></path>
+                <a href="https://microscope.openai.com/models/contrastive_rn50/image_block_4_2_add_5_0/11" target="_blank">
+                  <path 
+                  d="M373,52 L549,52 C560.045695,52 569,60.954305 569,72 L569,268 L569,268 L353,268 L353,72 C353,60.954305 361.954305,52 373,52 Z" 
+                  id="Rectangle" fill="url(#img10)"></path>
+                </a>
+              <line x1="353.5" y1="272.5" x2="569.5" y2="272.5" id="Line" stroke="#FFFFFF" stroke-width="5"
+                stroke-linecap="square"></line>
+              <text id="0.98×" fill-rule="nonzero" font-family="HelveticaNeue-Medium, Helvetica Neue" font-size="30"
+                font-weight="400" fill="#747474">
+                <tspan x="70.31" y="29">0.15×</tspan>
+              </text>
+              <text id="+" fill-rule="nonzero" font-family="HelveticaNeue, Helvetica Neue" font-size="63" font-weight="normal"
+                fill="#747474">
+                <tspan x="266.1" y="292">+</tspan>
+              </text>
+              <text id="=" fill-rule="nonzero" font-family="HelveticaNeue, Helvetica Neue" font-size="63" font-weight="normal"
+                fill="#747474">
+                <tspan x="619.1" y="292">=</tspan>
+              </text>
+              <text id="0.02×" fill-rule="nonzero" font-family="HelveticaNeue-Medium, Helvetica Neue" font-size="30"
+                font-weight="400" fill="#747474">
+                <tspan x="423.31" y="29">0.85×</tspan>
+              </text>
+            </g>
+          </g>
+        </g>
+      </svg>
+      <figcaption style="margin-top: 10px">
+        <a href="#figure-res-2" class="figure-number">FIGURE</a>
+        Unit 11 from layer 4/1/6 (a ReLU), 4/2/5 (a 1×1 conv), and 4/2/6 (the final ReLU). The unit in 4/1/6 seems to detect for NFL/
+          football-related images, while the same unit in 4/2/5 activates highly on babies. Unit 11 in 4/2/6 appears to activate most strongly
+          on babies, but also detects for the NFL/footballs.
+      </figcaption>
+    </figure>
+
+    <p>It appeared that on most channels, the network learned a near identity mapping over the ultimate bottleneck; around 86% of the
+    channels, when activated on the respective feature visualization of the last ReLU, had over 90% of the input to the last ReLU
+    coming from the shortcut. The penultimate bottleneck exhibited similar qualities. On channels that learned near identity 
+    mappings, we would see that the feature visualizations and dataset
+    examples from the two ReLUs - one at the end of the bottleneck and one at the end of the previous bottleneck) looked relatively similar,
+    while the feature visualizations and dataset examples from the corresponding 1×1 convolutional layer would often resemble very unrelated
+    concepts. Likewise, on channels that appeared to learn within the bottleneck, we would see the dataset examples from the two ReLUs tell 
+    somewhat different stories, and the examples from the preceding convolutional layer more prevalent in the ultimate ReLU.</p>
+
+    <p>We take this to mean that enrichment circuits are the exception, not the rule &mdash; by the last couple of bottlenecks,
+      the network's representations have mostly solidified, with only a few abstract concepts contributing to more general neurons in the last layer.
+      This interpretation should be qualified by our uncertainty over the accuracy of using feature visualizations to analyze contributions.
+      While this method appeared to yield results that were consistent with dataset examples, we'd like to repeat this experiment in the future
+      using e.g. the top 100 dataset examples of the bottleneck's <code>relu</code> and averaging the contributions of the convolutional layer and previous ReLU
+      for each example.</p>
+
+    <h2>Methodology</h2>
+
+    <h3>Discovering Units of Interest</h3>
+
+    <p>In the initial stage of our research, we focused on developing tools to make sense of the 2,048 channels in CLIP-RN50's final layer. These tools, listed below, allowed us to find units of interest such as those that activated most highly for a given text.</p>
+
+    <dl>
+      <dt>Text Rasterization and the Channel Difference Engine</dt>
+      <dd>
+        <p>One initial goal was to identify the unit that activated most highly for a given word, e.g. <clip-n data-id="4/2/6/1052">Trump."</clip-n>. We used Captum's<d-cite key="kokhlikyan2020captum"></d-cite> <code>LayerActivation</code> module to rasterize a 224×224 image of the text "Trump", and then instrumented the network to track activations for each layer. Then, we took the mean of the <code>x, y</code> spatial positions to get the average activation per channel in each layer. We then investigated the maximumally-activating channels produced from this process; however, we found that this approach gave us <clip-n data-id="4/2/6/341">a unit merely tuned for detecting text</clip-n> rather than any units of interest.</p>
+        
+        <p>To resolve this, we decided to calculate a baseline activation distribution by rasterizing the meaningless text "<a href="https://www.biologycorner.com/worksheets/storylab-microscope-e.html">e</a>eeeee" and subtracting it from the activations of our target word; this allowed us to find meaningful units in the difference between the two activations.
+      </dd>
+
+      <dt>Activation Databases</dt>
+      <dd>
+        <p>After developing the channel difference engine, we then used a <a href="https://github.com/first20hours/google-10000-english">list of the top 10,000 most common English words</a> to create mappings from "word &rarr; most highly-activating unit" and "unit &rarr; most-highly activating word." We found this useful for exploring concepts in the final layer through an interactive interface.</p>
+      </dd>
+    </dl>
+
+    <p><em>Credit to Chelsea Voss for the inspiration and design behind these tools.</em></p>
+
+    <h3 id="contribution">Contributions</h3>
+    <p>To understand feature contributions, we relied on expanded weights<d-cite key="voss2021visualizing"></d-cite> which takes in two units (from any two layers) and returns a matrix that represents the strength of the connection between the layers. As in Voss et al, this matrix is spatially meaningful, though for our purposes we did not make much use of it &mdash; to find the top contributing units from one layer to some unit in a later layer, we just looked at which units had expanded weights matrices with the highest magnitudes. Though our tool also allows for finding the top units order by mean, though we found these measures of contribution strength to roughly correspond.
+    </p>
+
+  </d-article>
+
+  <d-appendix>
+    <h3>Source Code</h3>
+    <p>The libraries and notebooks used to discover the above results can be found <a href="https://github.com/seri-circuits-win21/clip-enrichment-circuits">here</a> on GitHub.</p>
+
+    <h3>Acknowledgements</h3>
+    <p>Many thanks to Chelsea Voss for mentoring us and providing valuable feedback on technical issues, methodology, and written drafts. Thanks to Chris Olah for initial guidance on circuit investigations, SERI for funding and application feedback, and Distill contributors for the publication format and valuable discussions in the #circuits channel.</p>
+    
+    <h3>Contributions</h3>
+
+    <p><em>Sidney Hough</em>: Implemented reading activations from the network and expanded weights. Came up with the idea to compare the residual and conv contributions, and implemented a scraper to download feature visualizations from Microscope. Performed investigation of circuits for the case studies. For the final writeup, created visualizations and styled all figures shown above.</p>
+
+    <p><em>Kevin Liu</em>: Implemented input generation for typographic attacks, image optimization, and initial expanded weights algorithm. Developed channel difference engine. Worked jointly on developing a database of activations from text to unit and unit to text. Performed investigation of circuits for the case studies.</p>
+
+    <p><em>Jack Ryan</em>: Developed contributions and versatility tools to visualize several properties of a given unit, as well as a tool to visualize the images corresponding to a certain level of activation of a unit (activation distribution tool). Came up with the idea to study large-scale forward contributions across layers and implemented an algorithm to do so using expanded weights. Performed investigation of circuits for the case studies.</p>
+
+    <p>† equal contributors</p>
+
+    <d-bibliography src="bibliography.bib"></d-bibliography>
+  </d-appendix>
+
+  <distill-footer></distill-footer>
+
+  <script src="./clip-elements.js" module></script>
+</body>
+</html>
